@@ -647,7 +647,7 @@ CREATE_HTML_TEMPLATE_PROMPT = """
         // 渲染辩论时间线
         function renderDebate() {
             const timeline = document.getElementById('debateTimeline');
-            const debateHistory = reportData.debate_history || [];
+            const debateHistory = reportData.debate_history || reportData.battle_results?.debate_history || [];
             
             if (debateHistory.length === 0) {
                 timeline.innerHTML = `
