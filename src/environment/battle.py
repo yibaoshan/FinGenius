@@ -205,7 +205,10 @@ class BattleEnvironment(BaseEnvironment):
             # Add battle instructions while preserving research context
             agent_description = getattr(agent, "description", "")
             agent_instructions = get_agent_instructions(agent.name, agent_description)
-            agent.update_memory("system", f"[Battle Environment] {agent_instructions}")
+            # Provider compatibility: some OpenAI-compatible gateways reject
+            # requests containing multiple system messages in one completion call.
+            # Use user-context message for battle instructions.
+            agent.update_memory("user", f"[Battle Environment] {agent_instructions}")
             
             logger.info(f"Agent {agent_id} registered for battle with preserved research context")
 

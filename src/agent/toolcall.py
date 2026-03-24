@@ -51,8 +51,26 @@ class ToolCallAgent(ReActAgent):
     async def think(self) -> bool:
         """Process current state and decide next actions using tools"""
         if self.next_step_prompt:
-            user_msg = Message.user_message(self.next_step_prompt)
-            self.messages += [user_msg]
+            # MiniMax compatibility: avoid stacking extra long user prompts on top of
+            # an existing user request, which can trigger 400 invalid chat settings.
+            base_url = (getattr(self.llm, "base_url", "") or "").lower()
+            is_minimax = "minimax" in base_url or "minimaxi" in base_url
+
+            should_append_next_step = True
+            if self.messages:
+                last_msg = self.messages[-1]
+                if (
+                    last_msg.role == "user"
+                    and last_msg.content == self.next_step_prompt
+                ):
+                    should_append_next_step = False
+
+            if is_minimax and any(msg.role == "user" for msg in self.messages):
+                should_append_next_step = False
+
+            if should_append_next_step:
+                user_msg = Message.user_message(self.next_step_prompt)
+                self.messages += [user_msg]
 
         try:
             # Get response with tool options

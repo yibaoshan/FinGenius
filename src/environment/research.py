@@ -79,7 +79,10 @@ class ResearchEnvironment(BaseEnvironment):
                     agent = self.get_agent(agent_key)
                     if agent and hasattr(agent, "memory"):
                         agent.memory.add_message(
-                            Message.system_message(stock_info_message)
+                            # Use user-context message for provider compatibility.
+                            # Some OpenAI-compatible gateways reject requests with
+                            # multiple system messages in one completion call.
+                            Message.user_message(stock_info_message)
                         )
                         logger.info(f"Added basic stock info to {agent_key}'s context")
 
