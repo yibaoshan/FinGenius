@@ -347,6 +347,60 @@ class CreateHtmlTool(BaseTool):
             return data
         else:
             return data
+
+    def _normalize_report_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize report data keys to improve template compatibility."""
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        research = normalized.get("research_results", {})
+        battle = normalized.get("battle_results", {})
+
+        if isinstance(research, dict):
+            research_copy = dict(research)
+            # 兼容不同命名：risk_control -> risk, technical_analysis -> technical
+            if "risk" not in research_copy and "risk_control" in research_copy:
+                research_copy["risk"] = research_copy.get("risk_control")
+            if "technical" not in research_copy and "technical_analysis" in research_copy:
+                research_copy["technical"] = research_copy.get("technical_analysis")
+            normalized["research_results"] = research_copy
+
+        if isinstance(battle, dict):
+            battle_copy = dict(battle)
+            # 兼容 vote_count / vote_results 双结构
+            if "vote_results" not in battle_copy and "vote_count" in battle_copy:
+                battle_copy["vote_results"] = battle_copy.get("vote_count")
+            if "vote_count" not in battle_copy and "vote_results" in battle_copy:
+                battle_copy["vote_count"] = battle_copy.get("vote_results")
+            normalized["battle_results"] = battle_copy
+
+            # 提供顶层兼容字段给不同模板
+            if "vote_results" not in normalized and "vote_results" in battle_copy:
+                normalized["vote_results"] = battle_copy.get("vote_results")
+            if "final_decision" not in normalized and "final_decision" in battle_copy:
+                normalized["final_decision"] = battle_copy.get("final_decision")
+            if "debate_history" not in normalized and "debate_history" in battle_copy:
+                normalized["debate_history"] = battle_copy.get("debate_history")
+
+        return normalized
+
+    def _is_html_complete(self, html_content: str) -> bool:
+        """Check whether generated HTML is complete enough to be safely rendered."""
+        if not html_content or not isinstance(html_content, str):
+            return False
+
+        lower_content = html_content.lower()
+        required_markers = [
+            "<!doctype html",
+            "<html",
+            "</html>",
+            "<body",
+            "</body>",
+            "<script",
+            "</script>",
+        ]
+        return all(marker in lower_content for marker in required_markers)
     
     def _inject_data_into_html(self, html_content: str, data: Dict[str, Any]) -> str:
         """Inject data into HTML template with enhanced robustness and validation"""
@@ -354,8 +408,9 @@ class CreateHtmlTool(BaseTool):
             import json
             logger.info("Starting data injection into HTML...")
             
-            # Sanitize data first to prevent injection issues
-            sanitized_data = self._sanitize_data_for_js(data)
+            # Normalize then sanitize to improve template compatibility
+            normalized_data = self._normalize_report_data(data)
+            sanitized_data = self._sanitize_data_for_js(normalized_data)
             logger.info(f"Data sanitized, keys: {list(sanitized_data.keys()) if isinstance(sanitized_data, dict) else 'non-dict'}")
             
             # Properly serialize data with safe escaping for JavaScript injection
@@ -432,22 +487,45 @@ class CreateHtmlTool(BaseTool):
             # 增强的fallback机制
             if not injection_success:
                 logger.warning("Standard injection failed, attempting enhanced fallback...")
-                
-                # 查找所有可能的script标签
-                script_patterns = [
-                    r'<script[^>]*>\s*',  # 任何script标签开始
-                    r'<script>\s*',       # 简单script标签
-                ]
-                
-                for pattern in script_patterns:
-                    match = re.search(pattern, html_content, re.IGNORECASE)
-                    if match:
-                        insertion_point = match.end()
-                        data_injection = f"\n        // 页面数据全局变量 - 自动注入\n        const reportData = {safe_data};\n"
-                        html_content = html_content[:insertion_point] + data_injection + html_content[insertion_point:]
-                        logger.info(f"Successfully injected data using fallback at position {insertion_point}")
+
+                # Always inject with an independent script block.
+                # Do NOT inject inside <script src="..."> tags, otherwise browsers
+                # ignore inline code and reportData becomes unavailable.
+                standalone_injection = (
+                    "\n    <script>\n"
+                    "        // 页面数据全局变量 - 自动注入\n"
+                    f"        window.reportData = {safe_data};\n"
+                    "        if (typeof reportData !== 'undefined') { reportData = window.reportData; }\n"
+                    "    </script>\n"
+                )
+
+                # Prefer injecting before </head> to ensure data is available early.
+                head_close = re.search(r"</head>", html_content, re.IGNORECASE)
+                if head_close:
+                    insertion_point = head_close.start()
+                    html_content = (
+                        html_content[:insertion_point]
+                        + standalone_injection
+                        + html_content[insertion_point:]
+                    )
+                    logger.info(
+                        f"Successfully injected standalone data script before </head> at position {insertion_point}"
+                    )
+                    injection_success = True
+                else:
+                    # Fallback to before </body>
+                    body_close = re.search(r"</body>", html_content, re.IGNORECASE)
+                    if body_close:
+                        insertion_point = body_close.start()
+                        html_content = (
+                            html_content[:insertion_point]
+                            + standalone_injection
+                            + html_content[insertion_point:]
+                        )
+                        logger.info(
+                            f"Successfully injected standalone data script before </body> at position {insertion_point}"
+                        )
                         injection_success = True
-                        break
             
             # 最终验证
             if injection_success:
@@ -573,6 +651,8 @@ class CreateHtmlTool(BaseTool):
             has_html_tag = bool(re.search(r'<html[^>]*>', html_content, re.IGNORECASE))
             has_head_tag = bool(re.search(r'<head[^>]*>', html_content, re.IGNORECASE))
             has_body_tag = bool(re.search(r'<body[^>]*>', html_content, re.IGNORECASE))
+            has_close_body = bool(re.search(r'</body>', html_content, re.IGNORECASE))
+            has_close_html = bool(re.search(r'</html>', html_content, re.IGNORECASE))
             has_charset = bool(re.search(r'<meta\s+charset', html_content, re.IGNORECASE))
             
             validation_results = {
@@ -580,6 +660,8 @@ class CreateHtmlTool(BaseTool):
                 'html_tag': has_html_tag,
                 'head_tag': has_head_tag,
                 'body_tag': has_body_tag,
+                'close_body': has_close_body,
+                'close_html': has_close_html,
                 'charset': has_charset
             }
             
@@ -710,6 +792,13 @@ class CreateHtmlTool(BaseTool):
                 raise ValueError("Generated HTML content is empty")
             
             logger.info(f"HTML generated successfully, length: {len(html_content)}")
+
+            # 如果模型输出被截断，直接使用稳定模板兜底，避免生成空白页
+            if not self._is_html_complete(html_content):
+                logger.warning("Generated HTML appears incomplete/truncated, falling back to built-in template")
+                html_content = CREATE_HTML_TEMPLATE_PROMPT
+                html_content = self._fix_encoding(html_content)
+                logger.info(f"Fallback template applied, length: {len(html_content)}")
             
             # Validate HTML structure
             is_valid_structure = self._validate_html_structure(html_content)

@@ -489,7 +489,7 @@ CREATE_HTML_TEMPLATE_PROMPT = """
     
     <script>
         // 页面数据全局变量 - 将被填充实际数据
-        let reportData = {};
+        let reportData = window.reportData || {};
         
         // DOM加载完成后执行
         document.addEventListener('DOMContentLoaded', function() {
@@ -766,7 +766,8 @@ CREATE_HTML_TEMPLATE_PROMPT = """
         }
         
         // 页面数据注入点 - 这里会被实际数据替换
-        const reportData = {}; // 这个会被实际的JSON数据替换
+        window.reportData = {}; // 这个会被实际的JSON数据替换
+        reportData = window.reportData;
     </script>
 </body>
 </html>
